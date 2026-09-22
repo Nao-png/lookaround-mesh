@@ -1,8 +1,10 @@
 """mt/7 の 6 面のメッシュを 1 つの OBJ に書き出す。
 
     python scripts/export_obj.py samples/pano0_mt7.bin pano0.obj [--max-edge 3]
+    python scripts/export_obj.py samples/pano6_mt7.bin pano6.obj --origin-from samples/pano0_mt7.bin
 
-座標はパノラマの位置を原点にした東・北・上（メートル）。空（w = 0）の頂点を
+座標はパノラマの位置を原点にした東・北・上（メートル）。--origin-from を付けると、
+そのファイルのパノラマの位置と向きを原点にする（複数のパノラマを重ねるとき）。空（w = 0）の頂点を
 含む三角形は除く。--max-edge を付けると、それより長い辺を持つ三角形（物陰を
 またいで手前と奥をつなぐもの）も除く。面ごとに OBJ のグループ（face0〜5）。
 """
@@ -30,10 +32,12 @@ def main():
     ap.add_argument("mt7")
     ap.add_argument("obj")
     ap.add_argument("--max-edge", type=float, default=None)
+    ap.add_argument("--origin-from", default=None)
     a = ap.parse_args()
 
     meshes = lm.meshes(open(a.mt7, "rb").read())
-    origin = lm.header(meshes[0])[0][:3, 3]
+    ref = lm.meshes(open(a.origin_from, "rb").read()) if a.origin_from else meshes
+    origin = lm.header(ref[0])[0][:3, 3]
     R = enu_basis(origin)
     lines, base = [], 1
     for f, raw in enumerate(meshes):
