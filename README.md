@@ -2,7 +2,7 @@
 
 Apple Look Around のパノラマごとに配信されている 3D メッシュ（`mt/7` ファイル）の解読記録とコード。
 
-Look Around のパノラマには、立方体の 6 面それぞれについて小さなメッシュが付いている。形式は非公開で、Look Around を解析してきた [sk-zk/lookaround](https://github.com/sk-zk/lookaround) でも「容器を区画に切り分けるところまで、区画の中身のパーサはまだ無い」とされていた。ここではその先を解いた。
+Look Around のパノラマには、6 つの面（経度で 4 つに切った帯と、上下の帽子）それぞれについて小さなメッシュが付いている。形式は非公開で、Look Around を解析してきた [sk-zk/lookaround](https://github.com/sk-zk/lookaround) でも「容器を区画に切り分けるところまで、区画の中身のパーサはまだ無い」とされていた。ここでは頂点の座標まで、全層を解いた。
 
 ## 状況
 
@@ -14,10 +14,11 @@ Look Around のパノラマには、立方体の 6 面それぞれについて�
 | 位置の行列（局所 → 地心座標 ECEF） | ✅ 解読 | 回転が正規直交、パノラマ間の距離が GPS と 0.2 m 以内（8/8） |
 | 接続情報（Edgebreaker の CLERS 文字列） | ✅ 解読 | 48/48 で三角形数・頂点数一致、向きの一貫した円盤状メッシュに復元 |
 | 頂点の残差の詰め方（1 バイト＋例外表） | ✅ 解読 | 48/48 で例外表の長さが 0xff の数と一致 |
-| 頂点の並び順 | △ 一部 | 境界は「走査で初めて触れた順」でまとまるが、全体は未確定 |
-| **予測の規則と座標の意味** | ❌ 未解明 | [docs/HYPOTHESES.md](docs/HYPOTHESES.md) に試して外れた仮説を記録 |
+| 頂点の並び（軸ごと、Apple の頂点番号順） | ✅ 解読 | 最初の三角形の 3 頂点（生の値）の位置を 48/48 で当てる |
+| 座標の組み立て（面の走査＋平行四辺形予測） | ✅ 解読 | 48/48 で全頂点が面の範囲に収まり、範囲が 8 枚で共通 |
+| 座標の意味（経度・緯度・距離の逆数） | ✅ 解読 | 地面が平面でカメラ高 2.30〜2.32 m（8/8）。翌日の別走行のメッシュと地心座標で重なる（中央値 0.25 m、対照 4.5 m） |
 
-つまり「どの頂点とどの頂点が三角形を作るか」と「各メッシュが地球上のどこにあるか」は分かる。「各頂点がどこにあるか」はまだ分からない。
+つまり、各メッシュの三角形と頂点の地心座標（ECEF）がすべて得られる。
 
 形式の詳細は [docs/FORMAT.md](docs/FORMAT.md)。
 
@@ -51,7 +52,15 @@ for raw in lm.meshes(b):                 # 立方体の 6 面
     mat, nv, nf = lm.header(raw)         # 局所→ECEF の 4x4 行列、頂点数、三角形数
     s, boundary = lm.clers(raw)          # CLERS 文字列と境界の頂点数
     tris, gates, _ = lm.decode(s, boundary)   # 三角形（頂点番号の組）
-    values = lm.vertex_values(raw)       # 頂点の残差 V×3 個（座標への組み立ては未解明）
+    P = lm.decode_vertices(raw, tris, boundary)  # (V, 3): 経度・緯度 [mrad]、距離の逆数 w
+    xyz = lm.to_ecef(raw, P)             # 地心座標 [m]（空の頂点 w = 0 は inf）
+    # まとめて: tris, P = lm.face_mesh(raw)
+```
+
+OBJ に書き出す（パノラマの位置を原点にした東・北・上）:
+
+```bash
+python scripts/export_obj.py samples/pano0_mt7.bin pano0.obj --max-edge 3
 ```
 
 ## 構成
@@ -60,11 +69,12 @@ for raw in lm.meshes(b):                 # 立方体の 6 面
 lookaround_mesh/    解けている層のライブラリ
   container.py      MCP4、LZFSE、CHNK、行列と頂点数
   edgebreaker.py    CLERS 文字列から三角形を復元
-  vertices.py       頂点の残差の取り出し（＋未完成の座標復元の試み）
+  vertices.py       頂点の値、頂点番号、座標の組み立て、ECEF への変換
   fetch.py          mt/7 の取得
 scripts/check.py    すべての主張の検証
 scripts/fetch_samples.py
-experiments/        座標復元の探索に使ったスクリプト（結果は docs/HYPOTHESES.md）
+scripts/export_obj.py
+experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
 samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）
 docs/
 ```
@@ -76,7 +86,7 @@ docs/
 - 中心（id 14755389547370281509、2026-04-21 の車載撮影）と、同じ走行で 4.5 m 間隔の 5 枚
 - 翌日（2026-04-22）の別走行で、中心から 1.7 m と 3.3 m の 2 枚
 
-別走行の 2 枚は同じ建物を別の位置から見ているので、座標の解読が正しければ、両者のメッシュは地心座標で重なるはず。これが座標復元の判定基準になる。
+別走行の 2 枚は同じ建物を別の位置から見ているので、座標の解読が正しければ、両者のメッシュは地心座標で重なるはず。これを座標復元の判定基準にし、満たした（docs/FORMAT.md の「検証」）。
 
 ## 注意: データの扱い
 
@@ -86,6 +96,7 @@ docs/
 
 - [sk-zk/streetlevel](https://github.com/sk-zk/streetlevel) — Look Around の取得と認証。`fetch.py` はその `Authenticator` を使う。
 - [sk-zk/lookaround](https://github.com/sk-zk/lookaround) — `mt/7` の取得と MCP4 の区画分け。
+- [retroplasma/flyover-reverse-engineering](https://github.com/retroplasma/flyover-reverse-engineering) — Apple Flyover の C3M 形式の Edgebreaker 変種。頂点番号の振り方と面の走査は同じ系統で、座標の組み立てを解く手がかりになった。
 
 ## ライセンス
 

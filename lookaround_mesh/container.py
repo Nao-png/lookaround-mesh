@@ -25,7 +25,7 @@ def mcp4_records(b):
 
 
 def meshes(b):
-    """立方体の各面のメッシュ（展開済み）。種類 1 = u8 3、u32 展開後の大きさ、LZFSE。"""
+    """各面のメッシュ（展開済み）。種類 1 = u8 3、u32 展開後の大きさ、LZFSE。"""
     import liblzfse
 
     out = []
@@ -41,8 +41,8 @@ def meshes(b):
 
 
 def face_images(b):
-    """立方体の各面の低解像度画像（HEIC のバイト列）。"""
-    return [b[off:off + size] for t, off, size in mcp4_records(b) if t == FACE_IMAGE]
+    """各面の低解像度画像（HEIC のバイト列）。記録の先頭 1 バイトは HEIC の前置き。"""
+    return [b[off + 1:off + size] for t, off, size in mcp4_records(b) if t == FACE_IMAGE]
 
 
 def chnks(m):

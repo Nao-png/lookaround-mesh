@@ -1,12 +1,21 @@
 """Apple Look Around の mt/7 ファイル（パノラマごとのメッシュ）の解読。
 
-解けている層: MCP4 容器、LZFSE、CHNK 小区画、位置の行列、残差の詰め方、
-Edgebreaker の接続情報。解けていない層: 頂点の予測規則と座標の意味
-（docs/FORMAT.md、docs/HYPOTHESES.md）。
+MCP4 容器 → LZFSE → CHNK 小区画 → 位置の行列、Edgebreaker の接続情報、
+頂点の値と、その座標への組み立て（docs/FORMAT.md）。
 """
 from .container import chnks, face_images, header, mcp4_records, meshes
 from .edgebreaker import clers, decode, first_touch, split_lengths
-from .vertices import vertex_values
+from .vertices import apple_ids, decode_vertices, to_ecef, to_local, vertex_values
+
+
+def face_mesh(m):
+    """1 面分: (三角形の頂点番号の組, (V, 3) の整数座標 (u, v, w))。"""
+    s, b = clers(m)
+    tris, _, _ = decode(s, b)
+    return tris, decode_vertices(m, tris, b)
+
 
 __all__ = ["mcp4_records", "meshes", "chnks", "header", "face_images",
-           "clers", "split_lengths", "decode", "first_touch", "vertex_values"]
+           "clers", "split_lengths", "decode", "first_touch",
+           "vertex_values", "apple_ids", "decode_vertices", "to_local", "to_ecef",
+           "face_mesh"]

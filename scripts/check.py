@@ -20,6 +20,74 @@ from lookaround_mesh.container import CHNK_HEADER_COPY, CHNK_PARAMS, CHNK_VERTIC
 from lookaround_mesh.vertices import BODY, ESCAPE  # noqa: E402
 
 
+def nearest(A, B, chunk=256):
+    """A の各点から B の最も近い点までの距離（scipy なしの総当たり）。"""
+    out = []
+    for i in range(0, len(A), chunk):
+        d = ((A[i:i + chunk, None, :] - B[None, :, :]) ** 2).sum(-1)
+        out.append(np.sqrt(d.min(1)))
+    return np.concatenate(out)
+
+
+def surface_samples(pano, centre, radius=30.0, longest=3.0, n=6):
+    """半径内の三角形の面上に点をまく。物陰をまたぐ長い三角形（最長辺 > longest m）は除く。"""
+    bary = np.array([(i / n, j / n) for i in range(n + 1) for j in range(n + 1 - i)])
+    out = []
+    for raw, tris, P in pano:
+        ok = P[:, 2] > 0
+        E = lm.to_ecef(raw, np.where(ok[:, None], P, 1))
+        T = np.array([t for t in tris if ok[list(t)].all()])
+        if not len(T):  # 空の面は全頂点が無限遠
+            continue
+        a, b, c = E[T[:, 0]], E[T[:, 1]], E[T[:, 2]]
+        edge = np.maximum.reduce([np.linalg.norm(a - b, axis=1), np.linalg.norm(b - c, axis=1),
+                                  np.linalg.norm(c - a, axis=1)])
+        keep = (edge < longest) & (np.linalg.norm(a - centre, axis=1) < radius)
+        a, b, c = a[keep], b[keep], c[keep]
+        out.append((a[:, None] + bary[None, :, :1] * (b - a)[:, None] + bary[None, :, 1:] * (c - a)[:, None]).reshape(-1, 3))
+    return np.vstack(out)
+
+
+def geometry(faces, meta, check):
+    """座標を地心座標に置いたときの主張: 面ごとの範囲、地面の平面、別走行との重なり。"""
+    ext = collections.defaultdict(list)
+    for k, pano in faces.items():
+        for f, (raw, tris, P) in enumerate(pano):
+            ext[f].append(np.r_[P[:, :2].min(0), P[:, :2].max(0)])
+    for f, e in ext.items():
+        check("座標: 面ごとの u, v の範囲が 8 枚で共通（差 2 以内）", np.ptp(np.array(e), axis=0).max() <= 2)
+
+    centre = {}
+    for k, pano in faces.items():
+        raw, tris, P = pano[5]  # 地面の面
+        E = lm.to_ecef(raw, P[P[:, 2] > 0])
+        c = lm.header(raw)[0][:3, 3]
+        up = c / np.linalg.norm(c)
+        G = E[np.linalg.norm(E - c, axis=1) < 3]
+        h = (G - c) @ up
+        check("座標: カメラ高（半径 3 m の地面の高さの中央値）が 2.2〜2.4 m", 2.2 < -np.median(h) < 2.4)
+        F = G[np.abs(h - np.median(h)) < 0.1]  # 人や車など地面から浮いた点を除く
+        _, S, Vt = np.linalg.svd(F - F.mean(0))
+        n = Vt[2]
+        check("座標: 半径 3 m の地面が平面（RMS 4 cm 未満）で法線が鉛直から 3° 以内",
+              S[2] / np.sqrt(len(F)) < 0.04 and np.degrees(np.arccos(abs(n @ up))) < 3)
+        centre[k] = (c, up)
+
+    c0, up = centre[0]
+    A = np.vstack([lm.to_ecef(raw, P[P[:, 2] > 0]) for raw, tris, P in faces[0]])
+    A = A[(np.linalg.norm(A - c0, axis=1) < 20) & ((A - c0) @ up > -1.3)]  # 20 m 以内、地面より 1 m 以上上
+    for m in meta:
+        if m["same_drive"]:
+            continue
+        cB, upB = centre[m["k"]]
+        S = surface_samples(faces[m["k"]], cB)
+        K = np.array([[0, -upB[2], upB[1]], [upB[2], 0, -upB[0]], [-upB[1], upB[0], 0]])
+        R = np.eye(3) + K + K @ K  # 鉛直軸まわりに 90° 回した対照
+        d, dc = nearest(A, S), nearest(A, (S - cB) @ R.T + cB)
+        check("座標: 別走行のパノラマと重なる（建物の点の中央値 0.5 m 未満、90° 回した対照は 2 m 超）",
+              np.median(d) < 0.5 and np.median(dc) > 2)
+
+
 def main(samples):
     meta = json.load(open(os.path.join(samples, "neighbours.json")))
     tally = collections.Counter()
@@ -31,6 +99,7 @@ def main(samples):
 
     params = set()
     origin = None
+    faces = {}
     for m in meta:
         b = open(os.path.join(samples, f"pano{m['k']}_mt7.bin"), "rb").read()
         recs = lm.mcp4_records(b)
@@ -38,6 +107,7 @@ def main(samples):
         meshes = lm.meshes(b)  # LZFSE の展開後の大きさは中で照合済み
         check("LZFSE: 6 面とも宣言どおりの大きさに展開", len(meshes) == 6)
         mats = []
+        faces[m["k"]] = []
         for raw in meshes:
             mat, nv, nf = lm.header(raw)
             mats.append(mat)
@@ -68,11 +138,19 @@ def main(samples):
             body = np.frombuffer(c[CHNK_VERTICES][BODY:BODY + 3 * nv], np.uint8)
             n_exc = (len(c[CHNK_VERTICES]) - BODY - 3 * nv) / 4
             check("頂点: 例外表の長さ = 本体の 0xff の数", n_exc == int((body == ESCAPE).sum()))
+            P = lm.decode_vertices(raw, tris, bnd)
+            val = lm.vertex_values(raw).reshape(3, nv).T
+            ids = lm.apple_ids(tris, bnd)
+            check("座標: 最初の三角形の 3 頂点は値そのもの（番号 0 と b-1 を含む）",
+                  all((P[j] == val[ids[j]]).all() for j in tris[0]) and {0, bnd - 1} <= {ids[j] for j in tris[0]})
+            check("座標: 奥行きの逆数 w がすべて 0 以上", (P[:, 2] >= 0).all())
+            faces[m["k"]].append((raw, tris, P))
         T = np.array([x[:3, 3] for x in mats])
         check("位置: 6 面が同じ平行移動を共有（1 mm 未満）", np.abs(T - T[0]).max() < 1e-3)
         origin = T[0] if origin is None else origin
         check("位置: パノラマ間の距離が GPS と 0.2 m 以内", abs(np.linalg.norm(T[0] - origin) - m["dist_m"]) < 0.2)
     check("種類 11: 全メッシュで同一", len(params) == 1)
+    geometry(faces, meta, check)
 
     width = max(len(k) for k in total)
     for k in total:
