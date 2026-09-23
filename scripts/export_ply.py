@@ -1,6 +1,8 @@
 """mt/7 のメッシュから色付きの点群を作り、PLY で書き出す。
 
     python scripts/export_ply.py samples/*.bin out/cloud.ply [--spacing 0.1] [--max-range 50]
+    python scripts/export_ply.py out/kanazawa out/kanazawa.ply   # フォルダを渡すと中の *.bin 全部
+    python scripts/export_ply.py --list list.txt out/street.ply  # 1 行 1 ファイルの一覧から
 
 各三角形の面に点をまき、面の低解像度画像（MCP4 の種類 3）から色を引く。点の
 間隔は近くで --spacing（m）、遠くでは角度が一定（--angular ラジアン）になる。
@@ -18,10 +20,14 @@
 --sky-range 0 で無効。
 
 画像の対応: 面の画像は、その面のメッシュの角度の範囲をちょうど覆う（1 画素
-およそ 5.44 mrad）。docs/FORMAT.md「種類 9」の範囲の表を参照。
+およそ 5.3〜5.5 mrad）。範囲は撮影によって違う（渋谷 2026 年の v は -1220〜609、
+金沢 2020 年は -1081〜531 で、画像の高さもそれに合わせて 336 px と 304 px）ので、
+メッシュごとの最小・最大から求める。docs/FORMAT.md「面の画像との対応」を参照。
 """
 import argparse
+import glob
 import io
+import multiprocessing as mp
 import os
 import sys
 
@@ -30,12 +36,6 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import lookaround_mesh as lm  # noqa: E402
-
-# 面ごとの (u 最小, u 最大, v 最小, v 最大)。サンプル 8 枚で共通（docs/FORMAT.md）
-FACE_BOUNDS = {0: (-1078, 1078, -1220, 609), 1: (-588, 588, -1220, 609),
-               2: (-1078, 1078, -1220, 609), 3: (-588, 588, -1220, 609),
-               4: (-522, 522, -522, 522), 5: (-1062, 1062, -1132, 1132)}
-
 
 def enu_basis(p):
     """ECEF の点 p での東・北・上の単位ベクトル（行）。"""
@@ -53,6 +53,17 @@ def face_image(blob, f):
     return np.asarray(Image.open(io.BytesIO(lm.face_images(blob)[f])).convert("RGB"))
 
 
+_GRID = {}
+
+
+def _grid(k):
+    """k 分割のバリ中心座標（使い回す）。"""
+    if k not in _GRID:
+        g = np.array([(i / k, j / k) for i in range(k + 1) for j in range(k + 1 - i)])
+        _GRID[k] = np.c_[1 - g.sum(1), g]
+    return _GRID[k]
+
+
 def sample_triangles(edge, spacing):
     """三角形ごとに、最長辺を spacing（三角形ごとの配列）で割った数だけ分割した
     バリ中心座標の格子。
@@ -61,8 +72,7 @@ def sample_triangles(edge, spacing):
     k = np.clip(np.ceil(edge / spacing).astype(int), 1, 200)
     idx, bary = [], []
     for kk in np.unique(k):
-        g = np.array([(i / kk, j / kk) for i in range(kk + 1) for j in range(kk + 1 - i)])
-        w = np.c_[1 - g.sum(1), g]
+        w = _grid(int(kk))
         where = np.flatnonzero(k == kk)
         idx.append(np.repeat(where, len(w)))
         bary.append(np.tile(w, (len(where), 1)))
@@ -76,7 +86,8 @@ def cloud(path, origin, R, a):
     for f, raw in enumerate(lm.meshes(blob)):
         tris, P = lm.face_mesh(raw)
         ok = P[:, 2] > 0
-        keep = np.array([t for t in tris if ok[list(t)].all()])
+        T = np.asarray(tris)
+        keep = T[ok[T].all(1)]
         if not len(keep):
             continue
         X = lm.to_local(np.where(ok[:, None], P, 1))
@@ -98,7 +109,8 @@ def cloud(path, origin, R, a):
 
         img = face_image(blob, f)
         H, W = img.shape[:2]
-        u0, u1, v0, v1 = FACE_BOUNDS[f]
+        u0, u1 = P[:, 0].min(), P[:, 0].max()   # 画像はこの範囲をちょうど覆う
+        v0, v1 = P[:, 1].min(), P[:, 1].max()
         x = np.clip(((uvw[:, 0] - u0) / (u1 - u0) * W).astype(int), 0, W - 1)
         y = np.clip(((uvw[:, 1] - v0) / (v1 - v0) * H).astype(int), 0, H - 1)
         col = img[y, x]
@@ -115,15 +127,40 @@ def cloud(path, origin, R, a):
     return p[r <= a.max_range], c[r <= a.max_range]
 
 
+_JOB = {}
+
+
+def _init(origin, R, a):
+    _JOB["origin"], _JOB["R"], _JOB["a"] = origin, R, a
+
+
+def _one(path):
+    """並列実行の 1 単位。返す前にそのパノラマの中でまとめる（親に送る量を減らす）。
+    失敗したパノラマは (None, 理由) を返す。"""
+    try:
+        p, c = cloud(path, _JOB["origin"], _JOB["R"], _JOB["a"])
+        return voxel_average(p, c, _JOB["a"].spacing)
+    except Exception as e:
+        return None, f"{os.path.basename(path)}: {e}"
+
+
 def voxel_average(p, c, size):
-    """size の格子ごとに 1 点にまとめる（位置と色は平均）。"""
-    key = np.round(p / size).astype(np.int64)
-    _, inv, n = np.unique(key, axis=0, return_inverse=True, return_counts=True)
-    out = np.zeros((len(n), 3)), np.zeros((len(n), 3))
+    """size の格子ごとに 1 点にまとめる（位置と色は平均）。
+
+    格子の番号を 1 つの int64 にまとめてから np.unique する（列ごとに並べ替える
+    np.unique(axis=0) は、点が増えると極端に遅くなる）。"""
+    q = np.round(np.asarray(p, np.float64) / size).astype(np.int64)
+    q -= q.min(0)
+    if q.max() >= (1 << 21):
+        raise ValueError("格子が大きすぎる: --spacing を大きくするか範囲を狭める")
+    key = (q[:, 0] << 42) | (q[:, 1] << 21) | q[:, 2]
+    _, inv, n = np.unique(key, return_inverse=True, return_counts=True)
+    pos = np.empty((len(n), 3), np.float32)
+    col = np.empty((len(n), 3), np.float64)
     for k in range(3):
-        out[0][:, k] = np.bincount(inv, p[:, k]) / n
-        out[1][:, k] = np.bincount(inv, c[:, k]) / n
-    return out[0], out[1].round().astype(np.uint8)
+        pos[:, k] = np.bincount(inv, p[:, k]) / n
+        col[:, k] = np.bincount(inv, c[:, k]) / n
+    return pos, col.round().astype(np.uint8)
 
 
 def write_ply(path, p, c):
@@ -145,12 +182,17 @@ def write_ply(path, p, c):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mt7", nargs="+")
+    ap.add_argument("mt7", nargs="*", help="mt/7 ファイル、またはそれが入ったフォルダ")
+    ap.add_argument("--list", help="mt/7 のパスを 1 行 1 つ書いた一覧（引数が多すぎるとき）")
     ap.add_argument("ply")
     ap.add_argument("--spacing", type=float, default=0.1, help="点の間隔 [m]")
     ap.add_argument("--angular", type=float, default=0.0027,
                     help="遠くでの点の間隔（ラジアン）。面の画像の 1 画素は約 0.00544")
     ap.add_argument("--max-range", type=float, default=100.0, help="パノラマからの距離の上限 [m]")
+    ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1),
+                    help="同時に処理するパノラマの数")
+    ap.add_argument("--chunk", type=int, default=8_000_000,
+                    help="まとめていない点がこれだけ貯まったらまとめる（メモリの上限を決める）")
     ap.add_argument("--max-edge", type=float, default=None, help="これより長い辺を持つ三角形を除く [m]")
     ap.add_argument("--sky-range", type=float, default=50.0,
                     help="この距離より遠く、色が空らしい点を除く [m]。0 で無効")
@@ -158,16 +200,43 @@ def main():
     ap.add_argument("--min-facing", type=float, default=0.08,
                     help="視線に対する面の向き（余弦）の下限。物陰をまたぐ三角形を除く")
     a = ap.parse_args()
+    if a.list:
+        a.mt7 = [ln.strip() for ln in open(a.list) if ln.strip()] + a.mt7
+    a.mt7 = [f for p in a.mt7
+             for f in (sorted(glob.glob(os.path.join(p, "*.bin"))) if os.path.isdir(p) else [p])]
+    if not a.mt7:
+        sys.exit("mt/7 ファイルがない")
 
     origin = lm.header(lm.meshes(open(a.mt7[0], "rb").read())[0])[0][:3, 3]
     R = enu_basis(origin)
-    pts, cols = [], []
-    for path in a.mt7:
-        p, c = cloud(path, origin, R, a)
-        pts.append(p)
-        cols.append(c)
-        print(f"{os.path.basename(path)}: {len(p)} points")
-    p, c = voxel_average(np.vstack(pts), np.vstack(cols), a.spacing)
+    base = None          # まとめ済み
+    pend, held = [], 0    # まだまとめていない分
+
+    def compact():
+        """まとめ済みと、貯まった分を 1 つにまとめる。"""
+        nonlocal base, pend, held
+        if pend:
+            p = np.vstack([base[0]] + [x[0] for x in pend]) if base else np.vstack([x[0] for x in pend])
+            c = np.vstack([base[1]] + [x[1] for x in pend]) if base else np.vstack([x[1] for x in pend])
+            base = voxel_average(p, c, a.spacing)
+            pend, held = [], 0
+        return base
+
+    with mp.Pool(a.jobs, initializer=_init, initargs=(origin, R, a)) as pool:
+        for i, (p, c) in enumerate(pool.imap_unordered(_one, a.mt7, chunksize=1)):
+            if p is None:
+                print(c)
+                continue
+            pend.append((p, c))
+            held += len(p)
+            if held > a.chunk:   # 貯まった分だけで判断する（まとめ済みの分は数えない）
+                compact()
+            if len(a.mt7) > 1 and (i + 1) % 50 == 0:
+                print(f"  {i + 1}/{len(a.mt7)}  まとめ済み {0 if base is None else len(base[0]) / 1e6:.1f}M 点"
+                      f" + 未処理 {held / 1e6:.1f}M 点", flush=True)
+    if compact() is None:
+        sys.exit("点が 1 つも作れなかった")
+    p, c = base
     write_ply(a.ply, p, c)
     print(f"{a.ply}: {len(p)} points, "
           f"{p[:, 0].min():.0f}..{p[:, 0].max():.0f} E, {p[:, 1].min():.0f}..{p[:, 1].max():.0f} N, "
