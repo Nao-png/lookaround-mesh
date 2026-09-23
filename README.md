@@ -60,8 +60,7 @@ for raw in lm.meshes(b):                 # 立方体の 6 面
 OBJ に書き出す（パノラマの位置を原点にした東・北・上）:
 
 ```bash
-python scripts/export_obj.py    OBJ に書き出す
-scripts/export_ply.py    色付きの点群を PLY に書き出す samples/pano0_mt7.bin pano0.obj --max-edge 3
+python scripts/export_obj.py samples/pano0_mt7.bin pano0.obj --max-edge 3
 ```
 
 色付きの点群（PLY）に書き出す。三角形の面に点をまき、面の画像から色を引き、複数のパノラマを 1 つにまとめる:
