@@ -2,14 +2,20 @@
 
     python scripts/export_ply.py samples/*.bin out/cloud.ply [--spacing 0.1] [--max-range 50]
 
-各三角形の面に間隔 --spacing（m）で点をまき、面の低解像度画像（MCP4 の種類 3）
-から色を引く。複数のファイルを渡すと 1 つの点群にまとめ、最初のファイルの
+各三角形の面に点をまき、面の低解像度画像（MCP4 の種類 3）から色を引く。点の
+間隔は近くで --spacing（m）、遠くでは角度が一定（--angular ラジアン）になる。
+面の画像の 1 画素が約 5.44 mrad なので、それより細かくしても情報は増えない。複数のファイルを渡すと 1 つの点群にまとめ、最初のファイルの
 パノラマの位置を原点にした東・北・上（メートル）で書き出す。重なった部分は
 --spacing の格子でまとめる（位置と色は平均）。
 
 除くもの: 空（w = 0）を含む三角形、視線とほぼ平行な三角形（物陰をまたいで手前と
 奥をつなぐもの。法線と視線のなす角の余弦が --min-facing 未満）、--max-range より
 遠い点。--max-edge を付けると、それより長い辺を持つ三角形も除く。
+
+側面の面には、画像では空が写っているのに遠くの面が作られている部分がある（空の
+帽子の面 4 は w = 0 だが、側面の空はそうならない）。既定では、色が空らしく
+（--sky-min より明るいか青が赤より 20 以上強く、青 ≥ 赤）、かつ --sky-range より遠い点を除く。
+--sky-range 0 で無効。
 
 画像の対応: 面の画像は、その面のメッシュの角度の範囲をちょうど覆う（1 画素
 およそ 5.44 mrad）。docs/FORMAT.md「種類 9」の範囲の表を参照。
@@ -48,7 +54,8 @@ def face_image(blob, f):
 
 
 def sample_triangles(edge, spacing):
-    """三角形ごとに、最長辺を spacing で割った数だけ分割したバリ中心座標の格子。
+    """三角形ごとに、最長辺を spacing（三角形ごとの配列）で割った数だけ分割した
+    バリ中心座標の格子。
 
     Returns (三角形の番号, バリ中心座標 (n, 3))。"""
     k = np.clip(np.ceil(edge / spacing).astype(int), 1, 200)
@@ -85,7 +92,8 @@ def cloud(path, origin, R, a):
         keep, edge = keep[sel], edge[sel]
         if not len(keep):
             continue
-        idx, bary = sample_triangles(edge, a.spacing)
+        r = np.linalg.norm(mid[sel], axis=1)
+        idx, bary = sample_triangles(edge, np.maximum(a.spacing, a.angular * r))
         uvw = (P[keep[idx]] * bary[:, :, None]).sum(1)
 
         img = face_image(blob, f)
@@ -93,11 +101,15 @@ def cloud(path, origin, R, a):
         u0, u1, v0, v1 = FACE_BOUNDS[f]
         x = np.clip(((uvw[:, 0] - u0) / (u1 - u0) * W).astype(int), 0, W - 1)
         y = np.clip(((uvw[:, 1] - v0) / (v1 - v0) * H).astype(int), 0, H - 1)
-        cols.append(img[y, x])
-
+        col = img[y, x]
         mat, _, _ = lm.header(raw)
-        E = lm.to_local(uvw) @ mat[:3, :3].T + mat[:3, 3]
-        pts.append((E - origin) @ R.T)
+        X3 = lm.to_local(uvw)
+        if a.sky_range:  # 画像では空なのに面が作られている部分を除く
+            c = col.astype(np.int16)
+            sky = ((c.min(1) > a.sky_min) | (c[:, 2] - c[:, 0] > 20)) & (c[:, 2] >= c[:, 0])                 & (np.linalg.norm(X3, axis=1) > a.sky_range)
+            X3, col = X3[~sky], col[~sky]
+        cols.append(col)
+        pts.append((X3 @ mat[:3, :3].T + mat[:3, 3] - origin) @ R.T)
     p, c = np.vstack(pts), np.vstack(cols)
     r = np.linalg.norm(p - (lm.header(lm.meshes(blob)[0])[0][:3, 3] - origin) @ R.T, axis=1)
     return p[r <= a.max_range], c[r <= a.max_range]
@@ -136,8 +148,13 @@ def main():
     ap.add_argument("mt7", nargs="+")
     ap.add_argument("ply")
     ap.add_argument("--spacing", type=float, default=0.1, help="点の間隔 [m]")
-    ap.add_argument("--max-range", type=float, default=50.0, help="パノラマからの距離の上限 [m]")
+    ap.add_argument("--angular", type=float, default=0.0027,
+                    help="遠くでの点の間隔（ラジアン）。面の画像の 1 画素は約 0.00544")
+    ap.add_argument("--max-range", type=float, default=100.0, help="パノラマからの距離の上限 [m]")
     ap.add_argument("--max-edge", type=float, default=None, help="これより長い辺を持つ三角形を除く [m]")
+    ap.add_argument("--sky-range", type=float, default=50.0,
+                    help="この距離より遠く、色が空らしい点を除く [m]。0 で無効")
+    ap.add_argument("--sky-min", type=int, default=165, help="空とみなす色の暗い方の成分の下限")
     ap.add_argument("--min-facing", type=float, default=0.08,
                     help="視線に対する面の向き（余弦）の下限。物陰をまたぐ三角形を除く")
     a = ap.parse_args()
