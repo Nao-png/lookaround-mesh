@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "point-cloud-viewer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/serve_web.py", "out/web_street"],
+      "autoPort": true,
+      "port": 8766
+    }
+  ]
+}

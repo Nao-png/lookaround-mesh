@@ -69,6 +69,15 @@ python scripts/export_obj.py samples/pano0_mt7.bin pano0.obj --max-edge 3
 python scripts/export_ply.py samples/pano*_mt7.bin cloud.ply --spacing 0.1 --max-range 40
 ```
 
+ほかの場所のパノラマを取ってきて、点群にし、ブラウザで見る:
+
+```bash
+python scripts/fetch_area.py 36.5722 136.6680 --radius 250 --out out/kanazawa
+python scripts/export_ply.py out/kanazawa out/kanazawa.ply --spacing 0.1 --max-range 15 --jobs 12
+python scripts/export_web.py out/kanazawa.ply out/web
+python scripts/serve_web.py out/web 8000        # ブラウザで http://localhost:8000
+```
+
 ## 構成
 
 ```
@@ -81,6 +90,9 @@ scripts/check.py    すべての主張の検証
 scripts/fetch_samples.py
 scripts/export_obj.py    OBJ に書き出す
 scripts/export_ply.py    色付きの点群を PLY に書き出す
+scripts/fetch_area.py    ある地点のまわりの mt/7 をまとめて取る
+scripts/export_web.py    点群をブラウザ用（three.js）に変換する
+scripts/serve_web.py     その出力を手元で配る
 experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
 samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）
 docs/
