@@ -96,6 +96,13 @@ python scripts/export_web_mesh.py out/shibuya out/web_shibuya --jobs 10 --max-ra
 
 奥行き（距離の逆数 w）は整数なので、距離 r での刻みは約 r² / 1000 m（50 m 先で 2.5 m）。高いビルの上部は粗く、破片のようになる。
 
+点群を学習なしで 3D Gaussian Splatting の形にする（面に沿った平たいガウス。Inria 形式の PLY なので SuperSplat などでも開ける）:
+
+```bash
+python scripts/export_splat.py out/street_crop.ply out/splat_street
+python scripts/serve_web.py out/splat_street 8000
+```
+
 ## 構成
 
 ```
@@ -111,6 +118,7 @@ scripts/export_ply.py    色付きの点群を PLY に書き出す
 scripts/fetch_area.py    ある地点のまわりの mt/7 をまとめて取る
 scripts/export_web.py    点群をブラウザ用（three.js）に変換する
 scripts/export_web_mesh.py  メッシュを画像付きでブラウザ用に変換する
+scripts/export_splat.py  点群を学習なしで 3DGS の形にする
 scripts/serve_web.py     その出力を手元で配る
 experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
 samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）

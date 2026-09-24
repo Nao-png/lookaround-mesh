@@ -30,6 +30,16 @@
       ],
       "autoPort": true,
       "port": 8768
+    },
+    {
+      "name": "splat-viewer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "scripts/serve_web.py",
+        "out/splat_street"
+      ],
+      "autoPort": true,
+      "port": 8769
     }
   ]
 }
