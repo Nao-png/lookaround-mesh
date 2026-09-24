@@ -78,6 +78,13 @@ python scripts/export_web.py out/kanazawa.ply out/web
 python scripts/serve_web.py out/web 8000        # ブラウザで http://localhost:8000
 ```
 
+メッシュのまま、面の画像を貼ってブラウザで見る。場所ごとに、いちばん近いパノラマのメッシュだけを使う:
+
+```bash
+python scripts/export_web_mesh.py out/kanazawa out/web_mesh --jobs 12
+python scripts/serve_web.py out/web_mesh 8000
+```
+
 ## 構成
 
 ```
@@ -92,6 +99,7 @@ scripts/export_obj.py    OBJ に書き出す
 scripts/export_ply.py    色付きの点群を PLY に書き出す
 scripts/fetch_area.py    ある地点のまわりの mt/7 をまとめて取る
 scripts/export_web.py    点群をブラウザ用（three.js）に変換する
+scripts/export_web_mesh.py  メッシュを画像付きでブラウザ用に変換する
 scripts/serve_web.py     その出力を手元で配る
 experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
 samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）
