@@ -20,6 +20,16 @@
       ],
       "autoPort": true,
       "port": 8767
+    },
+    {
+      "name": "shibuya-mesh-viewer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "scripts/serve_web.py",
+        "out/web_shibuya"
+      ],
+      "autoPort": true,
+      "port": 8768
     }
   ]
 }

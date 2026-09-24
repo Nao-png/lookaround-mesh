@@ -78,12 +78,23 @@ python scripts/export_web.py out/kanazawa.ply out/web
 python scripts/serve_web.py out/web 8000        # ブラウザで http://localhost:8000
 ```
 
-メッシュのまま、面の画像を貼ってブラウザで見る。場所ごとに、いちばん近いパノラマのメッシュだけを使う:
+メッシュのまま、面の画像を貼ってブラウザで見る:
 
 ```bash
 python scripts/export_web_mesh.py out/kanazawa out/web_mesh --jobs 12
 python scripts/serve_web.py out/web_mesh 8000
 ```
+
+場所ごとに、それをいちばん正確に写すパノラマ（面上の 1 画素の大きさと奥行きの刻みで比べる）のメッシュだけを使う。
+
+渋谷のように撮影の多い場所では、年をそろえて間引いてから取る（建て替えが多く、年をまたぐと建物が食い違う）。ビルが高いので距離の上限を広げる:
+
+```bash
+python scripts/fetch_area.py 35.6595 139.7005 --radius 250 --date 2026 --min-spacing 3 --out out/shibuya
+python scripts/export_web_mesh.py out/shibuya out/web_shibuya --jobs 10 --max-range 50 --min-facing 0.15 --sky-range 30 --max-edge 4
+```
+
+奥行き（距離の逆数 w）は整数なので、距離 r での刻みは約 r² / 1000 m（50 m 先で 2.5 m）。高いビルの上部は粗く、破片のようになる。
 
 ## 構成
 

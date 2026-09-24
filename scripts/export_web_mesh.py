@@ -4,17 +4,25 @@
     python scripts/serve_web.py out/web_mesh 8000
 
 パノラマのメッシュはそれぞれ自分の位置から見た奥行きなので、全部をそのまま重ねると
-同じ壁が何十枚も重なる。そこで三角形ごとに、重心に（水平距離で）いちばん近い
-パノラマのものだけを残す（パノラマの位置によるボロノイ分割）。どの場所も、そこを
-いちばん近くから撮ったパノラマのメッシュで表すことになる。隣どうしの三角形の
-切れ目はかみ合わないので、境目は --overlap だけ重ねてすき間を埋める。
+同じ壁が何十枚も重なる。そこで三角形ごとに、それをいちばん正確に写している
+パノラマのものだけを残す。正確さは、画像の 1 画素が面の上で占める大きさ
+（距離 × 1 画素の角度 ÷ 視線と法線のなす角の余弦）と、奥行きの刻み（距離の逆数 w が
+整数なので、距離 r では約 r² / 1000 m。20 m で 0.4 m、50 m で 2.5 m）を合わせた
+誤差で比べる。候補は水平に近い --candidates 枚で、
+面を裏から見る位置にあるものは除く（壁の向こうの通りのパノラマなど）。遮るものは
+考えない。路面だけなら、ほぼ水平距離でいちばん近いパノラマを選ぶことになるが、高い
+ビルの壁は足元の歩道からより通りの向こうからの方が細かく写るので、そちらが選ばれる。
+隣どうしの三角形の切れ目はかみ合わないので、判定は重心でなく 3 つの頂点で行い、
+どれか 1 つでも自分が最良なら残す。境目では両側の三角形が 1 列ずつ重なり、すき間が
+できない（重心で決めると、どちらにも属さない細いすき間が残る）。誤差が最良の
+(1 + --overlap) 倍以内なら最良とみなす。
 
 面の画像は、その面のメッシュの角度の範囲をちょうど覆う（export_ply.py と同じ対応）
 ので、頂点の (u, v) がそのまま画像の座標になる。残った三角形が使う部分だけを
-切り出し、4096 px 四方のアトラスに詰める。
+64 px の区画ごとに切り出し、幅 4096 px のアトラスに詰める。
 
-除くもの: 空（w = 0）を含む三角形、視線とほぼ平行な三角形（--min-facing。どの面もいちばん近いパノラマから
-見るので、点群のときより厳しくしてよい）、
+除くもの: 空（w = 0）を含む三角形、視線とほぼ平行な三角形（--min-facing。どの面も
+よく写すパノラマから見るので、点群のときより厳しくしてよい）、
 --max-edge より長い辺を持つ三角形、パノラマから --max-range より遠い三角形、
 --sky-range より遠くて色が空らしい三角形。
 
@@ -38,7 +46,9 @@ import lookaround_mesh as lm  # noqa: E402
 from export_ply import enu_basis, face_image  # noqa: E402
 
 ATLAS = 4096
+PIXEL = 0.0054   # 面の画像の 1 画素 [rad]
 PAD = 2      # 切り出しの余白 [px]（隣の切り出しがにじまないように）
+TILE = 64    # 切り出しの区画 [px]
 
 HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
@@ -76,8 +86,9 @@ scene.background = new THREE.Color(0x0b0d10);
 const loader = new THREE.TextureLoader();
 const mats = [], meshes = [];
 let tris = 0;
-for (const g of meta.groups) {
-  const tex = await loader.loadAsync(g.file);
+const texs = await Promise.all(meta.groups.map(g => loader.loadAsync(g.file)));   // 並行して読む
+for (const [k, g] of meta.groups.entries()) {
+  const tex = texs[k];
   tex.flipY = false;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.generateMipmaps = false;               // 隣の切り出しがにじまないように
@@ -116,7 +127,7 @@ ctl.update();
 window.view = { cam, ctl, meta };   // コンソールから視点を動かす用
 
 document.getElementById('n').textContent =
-  tris.toLocaleString() + ' 三角形 · パノラマ ' + meta.count + ' 枚';
+  tris.toLocaleString() + ' 三角形 · ' + (meta.label || 'パノラマ ' + meta.count + ' 枚');
 document.getElementById('gain').oninput = e => {
   for (const m of mats) m.color.setScalar(+e.target.value / 100);
 };
@@ -155,8 +166,32 @@ def _init(pos, origin, R, a):
     _JOB.update(pos=pos, origin=origin, R=R, a=a, tree=cKDTree(pos[:, :2]))
 
 
+def best_view(i, cen, nrm, a):
+    """点 cen（法線 nrm の面の上）のうち、パノラマ i がほかの候補と比べて
+    (1 + overlap) 倍以内の誤差で写しているもの（真偽の配列）。"""
+    pos = _JOB["pos"]
+    k = min(a.candidates, len(pos))
+    _, J = _JOB["tree"].query(cen[:, :2], k=k)
+    J = J.reshape(len(cen), k)
+    nn = np.linalg.norm(nrm, axis=1) + 1e-12
+
+    def score(V):   # V: 視点から点へ (..., 3)。面の上での誤差 [m]
+        r = np.linalg.norm(V, axis=-1) + 1e-9
+        cos = (V * nrm[..., None, :] if V.ndim == 3 else V * nrm).sum(-1)
+        cos = cos / (r * (nn[:, None] if V.ndim == 3 else nn))
+        side = r * PIXEL / np.maximum(np.abs(cos), 1e-6)   # 1 画素が面の上で占める大きさ
+        depth = r * r / lm.vertices.DEPTH                  # w が整数なので奥行きの刻み
+        return np.hypot(side, depth), cos, r
+
+    own, oc, _ = score(cen - pos[i])
+    s, c, r = score(cen[:, None, :] - pos[J])
+    bad = (np.sign(c) != np.sign(oc)[:, None]) | (np.abs(c) < a.min_facing) | (r > a.max_range)
+    s[bad] = np.inf
+    return own <= np.minimum(s.min(1), own) * (1 + a.overlap)
+
+
 def trimmed(i, path):
-    """パノラマ i の、自分がいちばん近い部分の三角形。面ごとに
+    """パノラマ i の、自分がよく写している部分の三角形。面ごとに
     (頂点 (m, 3) 東・北・上, 切り出した画像での画素座標 (m, 2), 三角形 (k, 3), 切り出した画像)。"""
     a, origin, R = _JOB["a"], _JOB["origin"], _JOB["R"]
     blob = open(path, "rb").read()
@@ -183,8 +218,9 @@ def trimmed(i, path):
         mat, _, _ = lm.header(raw)
         E = (X @ mat[:3, :3].T + mat[:3, 3] - origin) @ R.T
         cen = (E[T[:, 0]] + E[T[:, 1]] + E[T[:, 2]]) / 3
-        near = _JOB["tree"].query(cen[:, :2])[0]
-        sel &= np.hypot(*(cen[:, :2] - _JOB["pos"][i, :2]).T) <= near + a.overlap
+        nrm = np.cross(E[T[:, 1]] - E[T[:, 0]], E[T[:, 2]] - E[T[:, 0]])
+        best = best_view(i, E[T.T.ravel()], np.tile(nrm, (3, 1)), a).reshape(3, -1)
+        sel &= best.any(0)
         img = face_image(blob, f)
         H, W = img.shape[:2]
         u0, u1 = P[:, 0].min(), P[:, 0].max()   # 画像はこの範囲をちょうど覆う
@@ -199,14 +235,19 @@ def trimmed(i, path):
         T = T[sel]
         if not len(T):
             continue
-        used, T = np.unique(T, return_inverse=True)
-        T = T.reshape(-1, 3)
-        q = px[used]
-        x0, y0 = np.maximum(np.floor(q.min(0)).astype(int) - PAD, 0)
-        x1 = min(int(np.ceil(q[:, 0].max())) + PAD, W)
-        y1 = min(int(np.ceil(q[:, 1].max())) + PAD, H)
-        out.append((E[used].astype(np.float32), (q - [x0, y0]).astype(np.float32),
-                    T.astype(np.uint32), np.ascontiguousarray(img[y0:y1, x0:x1])))
+        # 残る三角形は画像の中で散らばるので、重心の区画ごとに切り出す（面ごとの
+        # 外接矩形で切ると空白まで詰めることになる）
+        c = (px[T[:, 0]] + px[T[:, 1]] + px[T[:, 2]]) / 3
+        cell = (c[:, 1] // TILE).astype(int) * 1000 + (c[:, 0] // TILE).astype(int)
+        for k in np.unique(cell):
+            t = T[cell == k]
+            used, t = np.unique(t, return_inverse=True)
+            q = px[used]
+            x0, y0 = np.maximum(np.floor(q.min(0)).astype(int) - PAD, 0)
+            x1 = min(int(np.ceil(q[:, 0].max())) + PAD, W)
+            y1 = min(int(np.ceil(q[:, 1].max())) + PAD, H)
+            out.append((E[used].astype(np.float32), (q - [x0, y0]).astype(np.float32),
+                        t.reshape(-1, 3).astype(np.uint32), np.ascontiguousarray(img[y0:y1, x0:x1])))
     return out
 
 
@@ -259,8 +300,10 @@ def main():
     ap.add_argument("--sky-range", type=float, default=10.0,
                     help="この距離より遠く、色が空らしい三角形を除く [m]。0 で無効")
     ap.add_argument("--sky-min", type=int, default=165, help="空とみなす色の暗い方の成分の下限")
-    ap.add_argument("--overlap", type=float, default=0.5,
-                    help="いちばん近いパノラマよりこれだけ遠くても残す [m]（境目のすき間を埋める）")
+    ap.add_argument("--overlap", type=float, default=0.1,
+                    help="誤差が最良のこの割合増しまでなら残す（境目のすき間を埋める）")
+    ap.add_argument("--candidates", type=int, default=16,
+                    help="三角形ごとに比べる、水平に近いパノラマの数")
     ap.add_argument("--quality", type=int, default=90, help="アトラスの JPEG の画質")
     ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
     a = ap.parse_args()
