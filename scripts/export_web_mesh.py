@@ -124,7 +124,7 @@ const ctl = new OrbitControls(cam, ren.domElement);
 ctl.target.set(0, 0, 0);
 ctl.enableDamping = true;
 ctl.update();
-window.view = { cam, ctl, meta };   // コンソールから視点を動かす用
+window.view = { cam, ctl, meta, ren, scene };   // コンソールから視点を動かす・描画する用
 
 document.getElementById('n').textContent =
   tris.toLocaleString() + ' 三角形 · ' + (meta.label || 'パノラマ ' + meta.count + ' 枚');

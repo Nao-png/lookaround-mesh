@@ -7,3 +7,7 @@
 - Apple Maps のデータをこの形で取り出すことは、Apple の利用規約に抵触しうる点に注意してください。
 
 `neighbours.json` は各パノラマの id・撮影日時・中心からの距離などの一覧です。
+
+`docs/images/` の画像（README の写真）も、Look Around のデータ（面画像とメッシュ）から作ったもので、同じ扱いです。公開に切り替える場合は、こちらも履歴ごと取り除いてください。
+
+The `.bin` files here and the pictures in `docs/images/` are Apple's copyrighted material, kept only to reproduce the decoding in this private repository. Remove them from the whole history before making the repository public.
