@@ -109,6 +109,12 @@ python scripts/export_web_mesh.py out/shibuya out/web_shibuya --jobs 10 --max-ra
 
 奥行き（距離の逆数 w）は整数なので、距離 r での刻みは約 r² / 1000 m（50 m 先で 2.5 m）。高いビルの上部は粗く、破片のようになる。
 
+パノラマから、ふつうのカメラで撮ったような画像を切り出す（方位・仰角・縦の画角を度で指定。`--zoom` で高解像度の面画像を取って使う）。メッシュの描画と同じ視点で並べると、写真とメッシュが 1 画素の精度で重なる:
+
+```bash
+python scripts/pano_view.py out/kanazawa/<id>_mt7.bin view.jpg --yaw 104 --pitch 0 --fov 60 --zoom 2
+```
+
 点群を学習なしで 3D Gaussian Splatting の形にする（面に沿った平たいガウス。Inria 形式の PLY なので SuperSplat などでも開ける）:
 
 ```bash
@@ -132,6 +138,7 @@ scripts/fetch_area.py    ある地点のまわりの mt/7 をまとめて取る
 scripts/export_web.py    点群をブラウザ用（three.js）に変換する
 scripts/export_web_mesh.py  メッシュを画像付きでブラウザ用に変換する
 scripts/export_splat.py  点群を学習なしで 3DGS の形にする
+scripts/pano_view.py     パノラマからふつうのカメラの画像を切り出す
 scripts/serve_web.py     その出力を手元で配る
 experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
 samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）
@@ -244,6 +251,12 @@ python scripts/fetch_area.py 35.6595 139.7005 --radius 250 --date 2026 --min-spa
 python scripts/export_web_mesh.py out/shibuya out/web_shibuya --jobs 10 --max-range 50 --min-facing 0.15 --sky-range 30 --max-edge 4
 ```
 
+Cut an ordinary camera view out of a panorama (heading, pitch and vertical field of view in degrees; `--zoom` fetches and uses the high-resolution face images). Rendered from the same viewpoint, the mesh lines up with the photo to the pixel:
+
+```bash
+python scripts/pano_view.py out/kanazawa/<id>_mt7.bin view.jpg --yaw 104 --pitch 0 --fov 60 --zoom 2
+```
+
 Turn a point cloud into 3D Gaussian Splatting without training (flat Gaussians aligned with the surface; an Inria-format PLY that SuperSplat and similar viewers can open):
 
 ```bash
@@ -267,6 +280,7 @@ scripts/fetch_area.py       fetch the mt/7 files around a place
 scripts/export_web.py       point cloud for the browser (three.js)
 scripts/export_web_mesh.py  textured meshes for the browser
 scripts/export_splat.py     point cloud to 3DGS without training
+scripts/pano_view.py        ordinary camera views cut out of a panorama
 scripts/serve_web.py        serve those outputs locally
 experiments/        early scripts from the search for the coordinate layer (docs/HYPOTHESES.md)
 samples/            mt/7 files of 8 panoramas at the Shibuya scramble crossing (see the notice below)
