@@ -115,6 +115,10 @@ python scripts/export_web_mesh.py out/shibuya out/web_shibuya --jobs 10 --max-ra
 python scripts/pano_view.py out/kanazawa/<id>_mt7.bin view.jpg --yaw 104 --pitch 0 --fov 60 --zoom 2
 ```
 
+![写真とメッシュの比較（ひがし茶屋街）](docs/images/photo_vs_mesh.jpg)
+
+ひがし茶屋街の本通りのパノラマ 1 枚について、高解像度の面画像から切り出した写真（左）と、993 枚分をまとめたメッシュを同じ位置・向き・画角で描画したもの（中）、その重ね合わせ（右）。メッシュの描画を上下左右にずらして写真との輪郭の強さの相関を測ると、3 方向とも最大はずれ (0, 0) px（1 px ≈ 0.06°）で、相関は 0.49〜0.56（20 px 以上ずらすと 0.09〜0.14）。違いは、空がないこと、軒下や植え込みなど奥行きが急に変わるところが崩れること、色が mt/7 の低解像度の画像から来ていてぼやけること。
+
 点群を学習なしで 3D Gaussian Splatting の形にする（面に沿った平たいガウス。Inria 形式の PLY なので SuperSplat などでも開ける）:
 
 ```bash
@@ -256,6 +260,10 @@ Cut an ordinary camera view out of a panorama (heading, pitch and vertical field
 ```bash
 python scripts/pano_view.py out/kanazawa/<id>_mt7.bin view.jpg --yaw 104 --pitch 0 --fov 60 --zoom 2
 ```
+
+![Photo vs. mesh at Higashi Chaya](docs/images/photo_vs_mesh.jpg)
+
+For one panorama on the main street of Higashi Chaya: the photo cut out of the high-resolution face images (left), the merged mesh of 993 panoramas rendered from the same position, heading and field of view (middle), and the two overlaid (right). Shifting the mesh render around and correlating edge strength with the photo, the best match is at (0, 0) px in all three views (1 px ≈ 0.06°), with correlation 0.49–0.56 (0.09–0.14 when shifted by 20 px or more). The differences: there is no sky, depth discontinuities such as eaves and shrubs break up, and the colours are blurry because they come from the low-resolution images in mt/7.
 
 Turn a point cloud into 3D Gaussian Splatting without training (flat Gaussians aligned with the surface; an Inria-format PLY that SuperSplat and similar viewers can open):
 
