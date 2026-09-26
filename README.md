@@ -39,10 +39,12 @@ Look Around のパノラマには、6 つの面（経度で 4 つに切った帯
 
 ```bash
 pip install -r requirements.txt
+python scripts/fetch_samples.py    # samples/ にサンプル 8 枚の mt/7 を取る（Apple のサーバーから）
 python scripts/check.py            # 解けている層の主張をすべて samples/ で検証
 python -m pytest tests -q
-python scripts/fetch_samples.py    # samples/ を取り直す（Apple のサーバーから）
 ```
+
+サンプルの mt/7 は Apple のデータなのでリポジトリには入れていない。`fetch_samples.py` は `samples/neighbours.json` に書いた id の 8 枚を取り、2026-09 の時点ではここで検証したものとバイト単位で同じファイルが返る。
 
 `scripts/check.py` の出力例（すべて OK になる）:
 
@@ -145,7 +147,7 @@ scripts/export_splat.py  点群を学習なしで 3DGS の形にする
 scripts/pano_view.py     パノラマからふつうのカメラの画像を切り出す
 scripts/serve_web.py     その出力を手元で配る
 experiments/        座標復元の探索で使った初期のスクリプト（docs/HYPOTHESES.md）
-samples/            渋谷スクランブル交差点のパノラマ 8 枚の mt/7（下記の注意）
+samples/            渋谷スクランブル交差点のパノラマ 8 枚の一覧（mt/7 は fetch_samples.py で取る）
 docs/
 ```
 
@@ -160,7 +162,7 @@ docs/
 
 ## 注意: データの扱い
 
-`samples/` の `.bin` と `docs/images/` の画像（Look Around のデータから作ったもの）は Apple の著作物で、このレポジトリのライセンスの対象外（[samples/NOTICE.md](samples/NOTICE.md)）。このレポジトリは非公開を前提にしている。**公開に切り替えるなら、先に `samples/` の `.bin` と `docs/images/` の画像を履歴ごと取り除くこと。** Apple Maps のデータをこの形で取り出すことは Apple の利用規約に抵触しうる。
+Look Around のデータ（mt/7 ファイル、面の画像）は Apple の著作物。このリポジトリにはサンプルの mt/7 を入れておらず、`scripts/fetch_samples.py` で各自取る。`docs/images/` の画像は、解読の結果を示すために Look Around のデータから作ったもので、Apple の画像を含み、このリポジトリのライセンス（MIT）の対象外（[samples/NOTICE.md](samples/NOTICE.md)）。Apple Maps のデータをこの形で取り出すことは Apple の利用規約に抵触しうる。取り出したデータを再配布しないこと。
 
 ## 先行研究
 
@@ -170,7 +172,7 @@ docs/
 
 ## ライセンス
 
-コードは MIT（[LICENSE](LICENSE)）。`samples/` のデータと `docs/images/` の画像は含まない。
+コードは MIT（[LICENSE](LICENSE)）。`docs/images/` の画像と、取得した Look Around のデータは含まない。
 
 ---
 
@@ -200,10 +202,12 @@ In short, a vertex is (u, v, w): u is longitude and v is latitude in milliradian
 
 ```bash
 pip install -r requirements.txt
+python scripts/fetch_samples.py    # fetch the 8 sample mt/7 files into samples/ (from Apple's servers)
 python scripts/check.py            # verify every claim above against samples/
 python -m pytest tests -q
-python scripts/fetch_samples.py    # re-fetch samples/ from Apple's servers
 ```
+
+The sample mt/7 files are Apple's data, so they are not in the repository. `fetch_samples.py` fetches the 8 ids listed in `samples/neighbours.json`; as of 2026-09 the server returns files byte-identical to the ones verified here.
 
 From code:
 
@@ -291,7 +295,7 @@ scripts/export_splat.py     point cloud to 3DGS without training
 scripts/pano_view.py        ordinary camera views cut out of a panorama
 scripts/serve_web.py        serve those outputs locally
 experiments/        early scripts from the search for the coordinate layer (docs/HYPOTHESES.md)
-samples/            mt/7 files of 8 panoramas at the Shibuya scramble crossing (see the notice below)
+samples/            list of 8 panoramas at the Shibuya scramble crossing (fetch the mt/7 files with fetch_samples.py)
 docs/
 ```
 
@@ -306,7 +310,7 @@ The two from the other drive see the same buildings from other positions, so if 
 
 ### Notice: data
 
-The `.bin` files in `samples/` and the pictures in `docs/images/` (made from Look Around data) are Apple's copyrighted material and are not covered by this repository's licence ([samples/NOTICE.md](samples/NOTICE.md)). This repository is meant to stay private. **Before making it public, remove the `.bin` files in `samples/` and the pictures in `docs/images/` from the whole history.** Extracting Apple Maps data this way may violate Apple's terms of service.
+Look Around data (mt/7 files, face images) is Apple's copyrighted material. The sample mt/7 files are not included; fetch them yourself with `scripts/fetch_samples.py`. The pictures in `docs/images/` were made from Look Around data to illustrate the results; they contain Apple imagery and are not covered by this repository's licence (MIT) ([samples/NOTICE.md](samples/NOTICE.md)). Extracting Apple Maps data this way may violate Apple's terms of service. Do not redistribute the data you extract.
 
 ### Prior work
 
@@ -316,4 +320,4 @@ The `.bin` files in `samples/` and the pictures in `docs/images/` (made from Loo
 
 ### Licence
 
-Code: MIT ([LICENSE](LICENSE)). The data in `samples/` and the pictures in `docs/images/` are not included.
+Code: MIT ([LICENSE](LICENSE)). The pictures in `docs/images/` and any fetched Look Around data are not included.

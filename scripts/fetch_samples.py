@@ -3,8 +3,11 @@
     python scripts/fetch_samples.py [出力先]
 
 同じ走行で 4.5 m 間隔の 6 枚（中心＋5 枚）と、翌日の別走行で中心から 1.7 m と
-3.3 m の 2 枚。一覧は samples/neighbours.json。取得したデータは Apple の著作物
-（samples/NOTICE.md）。
+3.3 m の 2 枚。samples/neighbours.json に書いてある id の 8 枚を取る（`--pick` を
+付けると、その時点の撮影一覧から選び直して neighbours.json も書き直す）。
+
+取得したデータは Apple の著作物なので、リポジトリには入れていない（samples/NOTICE.md）。
+scripts/check.py とテストの前に、これで取っておく。
 """
 import json
 import math
@@ -34,8 +37,18 @@ def pick():
     return [(p, dist(p), i <= len(same)) for i, p in enumerate([a] + same + other)]
 
 
-def main(out):
-    os.makedirs(out, exist_ok=True)
+def fetch_listed(out):
+    """neighbours.json の id を取る。"""
+    for m in json.load(open(os.path.join(ROOT, "samples", "neighbours.json"))):
+        b = fetch_mt(m["id"], m["build_id"])
+        open(os.path.join(out, f"pano{m['k']}_mt7.bin"), "wb").write(b)
+        note = "" if len(b) == m["bytes"] else f"（記録は {m['bytes']} B。配信が変わった可能性）"
+        print(f"pano{m['k']}: {'同じ走行' if m['same_drive'] else '別の走行'} {m['dist_m']:5.1f} m"
+              f"  {m['date']}  {len(b)} B{note}")
+        time.sleep(0.5)
+
+
+def fetch_picked(out):
     meta = []
     for k, (p, d, same) in enumerate(pick()):
         b = fetch_mt(p.id, p.build_id)
@@ -48,4 +61,7 @@ def main(out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "samples"))
+    args = [a for a in sys.argv[1:] if a != "--pick"]
+    out = args[0] if args else os.path.join(ROOT, "samples")
+    os.makedirs(out, exist_ok=True)
+    (fetch_picked if "--pick" in sys.argv else fetch_listed)(out)

@@ -1,13 +1,19 @@
-# samples/ のデータについて
+# samples/ について
 
-`pano*_mt7.bin` は Apple Look Around のサーバーから取得したデータ（渋谷スクランブル交差点のパノラマ 8 枚分のメッシュと面画像）で、**Apple の著作物**です。このレポジトリのライセンス（MIT）の対象ではありません。
+渋谷スクランブル交差点の Look Around パノラマ 8 枚（`neighbours.json` に id・撮影日時・中心からの距離などの一覧）。
 
-- このレポジトリは非公開を前提に、解読の再現用として置いています。
-- 公開に切り替える場合は、先にこのフォルダの `.bin` を履歴ごと取り除いてください（`git filter-repo` など）。データは `scripts/fetch_samples.py` で各自取り直せます。
-- Apple Maps のデータをこの形で取り出すことは、Apple の利用規約に抵触しうる点に注意してください。
+mt/7 ファイル（`pano*_mt7.bin`）は Apple Look Around のサーバーから取得するデータで、**Apple の著作物**です。そのためリポジトリには入れていません。`python scripts/fetch_samples.py` で取ってください（`.gitignore` 済み）。
 
-`neighbours.json` は各パノラマの id・撮影日時・中心からの距離などの一覧です。
+`docs/images/` の画像（README の写真）は、解読の結果を示すために Look Around のデータ（面の画像とメッシュ）から作ったもので、Apple の画像を含みます。このリポジトリのライセンス（MIT）の対象ではありません。
 
-`docs/images/` の画像（README の写真）も、Look Around のデータ（面画像とメッシュ）から作ったもので、同じ扱いです。公開に切り替える場合は、こちらも履歴ごと取り除いてください。
+Apple Maps のデータをこの形で取り出すことは、Apple の利用規約に抵触しうる点に注意してください。取り出したデータは再配布しないでください。
 
-The `.bin` files here and the pictures in `docs/images/` are Apple's copyrighted material, kept only to reproduce the decoding in this private repository. Remove them from the whole history before making the repository public.
+---
+
+The 8 Look Around panoramas at the Shibuya scramble crossing (listed with ids, capture times and distances in `neighbours.json`).
+
+The mt/7 files (`pano*_mt7.bin`) are Apple's copyrighted data fetched from Apple's Look Around servers, so they are not in the repository. Fetch them with `python scripts/fetch_samples.py` (they are git-ignored).
+
+The pictures in `docs/images/` were made from Look Around data (face images and meshes) to illustrate the results. They contain Apple imagery and are not covered by this repository's licence (MIT).
+
+Extracting Apple Maps data this way may violate Apple's terms of service. Do not redistribute the data you extract.
