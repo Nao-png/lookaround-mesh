@@ -21,9 +21,10 @@ Look Around のパノラマには、6 つの面（経度で 4 つに切った帯
 
 | 層 | 状態 | 裏付け |
 |---|---|---|
-| 容器 `MCP4`（記録の表） | ✅ 解読 | 8/8 のファイルで記録がすき間なく全体を覆う |
+| 容器 `MCP4`（記録の表） | ✅ 解読 | 0x08 からの 20 記録が、8/8 のファイルですき間なく全体を覆う |
+| パノラマの情報（MCP4 の種類 5） | 🟡 一部 | パノラマ id と ECEF 位置は 8/8 で一致。180 個の値は方位 2° ごとの 0〜100 の表を差分で詰めたもの（手元の 5,094 枚で累積が 0〜100 に収まる）。何の値かは未確定 |
 | 圧縮（LZFSE） | ✅ 解読 | 48/48 のメッシュが宣言どおりの大きさに展開 |
-| 小区画 `CHNK` の並び | ✅ 解読 | 種類 0・4・5・9・10・11 |
+| 小区画 `CHNK` の並び | ✅ 解読 | 種類 0・4・5・9・10・11。種類 10 の末尾は面の投影で、被覆タイルのレンズ投影と同じ値（48/48 で頂点が画像の範囲に収まる） |
 | 位置の行列（局所 → 地心座標 ECEF） | ✅ 解読 | 回転が正規直交、パノラマ間の距離が GPS と 0.2 m 以内（8/8） |
 | 接続情報（Edgebreaker の CLERS 文字列） | ✅ 解読 | 48/48 で三角形数・頂点数一致、向きの一貫した円盤状メッシュに復元 |
 | 頂点の残差の詰め方（1 バイト＋例外表） | ✅ 解読 | 48/48 で例外表の長さが 0xff の数と一致 |
@@ -31,7 +32,7 @@ Look Around のパノラマには、6 つの面（経度で 4 つに切った帯
 | 座標の組み立て（面の走査＋平行四辺形予測） | ✅ 解読 | 48/48 で全頂点が面の範囲に収まり、範囲が 8 枚で共通 |
 | 座標の意味（経度・緯度・距離の逆数） | ✅ 解読 | 地面が平面でカメラ高 2.30〜2.32 m（8/8）。翌日の別走行のメッシュと地心座標で重なる（中央値 0.25 m、対照 4.5 m） |
 
-つまり、各メッシュの三角形と頂点の地心座標（ECEF）がすべて得られる。
+つまり、各メッシュの三角形と頂点の地心座標（ECEF）がすべて得られる。未解読のまま残っているものは [docs/FORMAT.md](docs/FORMAT.md#未解読のまま残っているもの) の末尾にまとめた。
 
 形式の詳細は [docs/FORMAT.md](docs/FORMAT.md)。
 
@@ -49,7 +50,7 @@ python -m pytest tests -q
 `scripts/check.py` の出力例（すべて OK になる）:
 
 ```
-OK MCP4: 記録がファイルをすき間なく覆う                       8/8
+OK MCP4: 0x08 からの 20 記録がファイルをすき間なく覆う        8/8
 OK 最初のループの長さ（文字列から計算）= V - Cの数          48/48
 OK 復元: どの辺も 2 枚以下、向きが一貫                      48/48
 OK 頂点: 例外表の長さ = 本体の 0xff の数                    48/48
@@ -180,13 +181,14 @@ Look Around のデータ（mt/7 ファイル、面の画像）は Apple の著�
 
 ### Status
 
-Every layer of the format is decoded, down to vertex coordinates. Look Around panoramas carry one small mesh per face (the panorama is split into four longitude strips plus top and bottom caps). The format is undocumented; [sk-zk/lookaround](https://github.com/sk-zk/lookaround) splits the container into chunks but had no parser for their contents.
+Every layer needed for the geometry is decoded, down to vertex coordinates (a few fields are still unknown; see the end of FORMAT.md). Look Around panoramas carry one small mesh per face (the panorama is split into four longitude strips plus top and bottom caps). The format is undocumented; [sk-zk/lookaround](https://github.com/sk-zk/lookaround) splits the container into chunks but had no parser for their contents.
 
 | Layer | State | Evidence |
 |---|---|---|
-| Container `MCP4` (record table) | ✅ decoded | Records tile the whole file without gaps (8/8 files) |
+| Container `MCP4` (record table) | ✅ decoded | 20 records, with the table starting at 0x08, tile the whole file without gaps (8/8 files) |
+| Panorama info (MCP4 record type 5) | 🟡 partly | Panorama id and ECEF position match (8/8). The 180 values are a delta-encoded 0–100 profile in 2° azimuth steps (the running sum stays in 0–100 in 5,094 local files); what it measures is still unknown |
 | Compression (LZFSE) | ✅ decoded | 48/48 meshes inflate to their declared size |
-| `CHNK` sub-chunks | ✅ decoded | Types 0, 4, 5, 9, 10, 11 |
+| `CHNK` sub-chunks | ✅ decoded | Types 0, 4, 5, 9, 10, 11. The tail of type 10 is the face projection, equal to the coverage tile's lens projection (vertices fit the image range, 48/48) |
 | Placement matrix (local → Earth-centred ECEF) | ✅ decoded | Rotation is orthonormal; distances between panoramas agree with GPS within 0.2 m (8/8) |
 | Connectivity (Edgebreaker CLERS string) | ✅ decoded | Triangle and vertex counts match (48/48); rebuilds consistently oriented disc-shaped meshes |
 | Residual packing (1 byte + escape table) | ✅ decoded | Escape table length equals the number of 0xff bytes (48/48) |

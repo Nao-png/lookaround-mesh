@@ -16,7 +16,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import lookaround_mesh as lm  # noqa: E402
-from lookaround_mesh.container import CHNK_HEADER_COPY, CHNK_PARAMS, CHNK_VERTICES  # noqa: E402
+from lookaround_mesh.container import (  # noqa: E402
+    CHNK_CLERS, CHNK_FACE_ID, CHNK_PARAMS, CHNK_PROJECTION, CHNK_VERTICES, FACE_INDEX, INDEX_TABLE)
 from lookaround_mesh.vertices import BODY, ESCAPE  # noqa: E402
 
 
@@ -102,13 +103,30 @@ def main(samples):
     faces = {}
     for m in meta:
         b = open(os.path.join(samples, f"pano{m['k']}_mt7.bin"), "rb").read()
-        recs = lm.mcp4_records(b)
-        check("MCP4: 記録がファイルをすき間なく覆う", recs[0][1] == 0x1b0 and recs[-1][1] + recs[-1][2] == len(b))
+        recs = lm.mcp4_records(b)  # 表の直後から順にすき間なく続くことは中で照合済み
+        check("MCP4: 0x08 からの 20 記録がファイルをすき間なく覆う",
+              len(recs) == 20 and recs[0][1] == 0x08 + 10 * 20 and recs[-1][1] + recs[-1][2] == len(b))
+        check("MCP4: 記録の並び（種類 5、メッシュ 6、種類 2・3 の組 6、種類 0）",
+              "".join(str(t) for t, _, _ in recs) == "5" + "1" * 6 + "23" * 6 + "0")
+        faces_of = list(range(6)) + [f for f in range(6) for _ in (2, 3)]
+        idx = next(b[o:o + s] for t, o, s in recs if t == INDEX_TABLE)
+        check("記録 0: 117 バイト、9 バイトの後の 6 バイト項目 18 個の先頭が各記録の面番号",
+              len(idx) == 117 and idx[:9] == bytes(9)
+              and [idx[9 + 6 * i] for i in range(18)] == faces_of
+              and all(idx[9 + 6 * i + 1:9 + 6 * i + 6] == bytes(5) for i in range(18)))
+        check("種類 2: 1 バイト目が面番号",
+              [b[o + 1] for t, o, s in recs if t == FACE_INDEX] == list(range(6)))
+        info = lm.pano_info(b)
+        check("種類 5: パノラマ id が一覧の id と一致", info["panoid"] == m["id"])
+        check("種類 5: 定数 0.01・180・127、値の数 180",
+              abs(info["scale"] - 0.01) < 1e-7 and len(info["values"]) == 180)
+        check("種類 5: 180 個の値の累積和が 0〜100 に収まる（サンプルはすべて 0）",
+              ((info["profile"] >= 0) & (info["profile"] <= 100)).all())
         meshes = lm.meshes(b)  # LZFSE の展開後の大きさは中で照合済み
         check("LZFSE: 6 面とも宣言どおりの大きさに展開", len(meshes) == 6)
         mats = []
         faces[m["k"]] = []
-        for raw in meshes:
+        for f, raw in enumerate(meshes):
             mat, nv, nf = lm.header(raw)
             mats.append(mat)
             rot = mat[:3, :3]
@@ -116,7 +134,16 @@ def main(samples):
                   np.abs(rot @ rot.T - np.eye(3)).max() < 1e-9 and abs(np.linalg.det(rot) - 1) < 1e-9)
             c = lm.chnks(raw)
             params.add(c[CHNK_PARAMS])
-            check("種類 10: 種類 9 の見出し（134 バイト）の写し", c[CHNK_HEADER_COPY][8:142] == c[CHNK_VERTICES][16:150])
+            check("種類 0: 行列の直前の u64 が面番号", struct.unpack_from("<Q", c[0], 22)[0] == f)
+            check("種類 10: 先頭 u32 1・u16 1・u16 面番号、続く 134 バイトが種類 9 の見出しの写し",
+                  struct.unpack_from("<IHH", c[CHNK_PROJECTION], 0) == (1, 1, f)
+                  and c[CHNK_PROJECTION][8:142] == c[CHNK_VERTICES][16:150])
+            check("種類 9: 投影の位置は恒等 (1, 1, 0, 0)",
+                  struct.unpack_from("<4d", c[CHNK_VERTICES], 150) == (1.0, 1.0, 0.0, 0.0))
+            check("種類 4: 末尾 12 バイトが (F, V, 1)", struct.unpack_from("<3I", c[CHNK_CLERS], 24 + nf) == (nf, nv, 1))
+            check("種類 5: u32 F、u32 1、F バイトの (面番号 + 1)",
+                  struct.unpack_from("<2I", c[CHNK_FACE_ID], 0) == (nf, 1) and len(c[CHNK_FACE_ID]) == 8 + nf
+                  and set(c[CHNK_FACE_ID][8:]) == {f + 1})
             s, bnd = lm.clers(raw)
             cnt = collections.Counter(s)
             check("CLERS: C/L/E/R/S の 5 文字だけで長さ F", len(s) == nf and set(s) <= set("CLERS"))
@@ -144,9 +171,14 @@ def main(samples):
             check("座標: 最初の三角形の 3 頂点は値そのもの（番号 0 と b-1 を含む）",
                   all((P[j] == val[ids[j]]).all() for j in tris[0]) and {0, bnd - 1} <= {ids[j] for j in tris[0]})
             check("座標: 奥行きの逆数 w がすべて 0 以上", (P[:, 2] >= 0).all())
+            su, sv, ou, ov = lm.projection(raw)
+            ndc = P[:, :2] * 1e-3 * (su, sv) + (ou, ov)
+            check("種類 10 の投影: 頂点の正規化座標が [-1, 1] に収まり、両端まで 1% 以内",
+                  (np.abs(ndc) <= 1.0).all() and (np.abs(ndc.min(0) + 1) < 0.01).all() and (np.abs(ndc.max(0) - 1) < 0.01).all())
             faces[m["k"]].append((raw, tris, P))
         T = np.array([x[:3, 3] for x in mats])
         check("位置: 6 面が同じ平行移動を共有（1 mm 未満）", np.abs(T - T[0]).max() < 1e-3)
+        check("種類 5: ECEF 位置が種類 0 の平行移動と一致（1 mm 未満）", np.abs(info["ecef"] - T[0]).max() < 1e-3)
         origin = T[0] if origin is None else origin
         check("位置: パノラマ間の距離が GPS と 0.2 m 以内", abs(np.linalg.norm(T[0] - origin) - m["dist_m"]) < 0.2)
     check("種類 11: 全メッシュで同一", len(params) == 1)
