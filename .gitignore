@@ -5,3 +5,6 @@ out/
 
 # Look Around のサンプル（Apple のデータ。scripts/fetch_samples.py で取る）
 samples/*.bin
+
+# Kaggle の設定（ユーザー名が入る。手元に残っているものを誤ってコミットしないように）
+kaggle/*/kernel-metadata.json

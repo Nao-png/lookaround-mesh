@@ -32,6 +32,56 @@
       "port": 8768
     },
     {
+      "name": "mesh-compare",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "scripts/serve_web.py",
+        "out"
+      ],
+      "autoPort": true,
+      "port": 8770
+    },
+    {
+      "name": "lookaround-flyover",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "../lookaround-flyover/serve.py",
+        "../lookaround-flyover/out/kanazawa"
+      ],
+      "autoPort": true,
+      "port": 8771
+    },
+    {
+      "name": "tokyo-station-r3d",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "../lookaround-flyover/serve.py",
+        "../lookaround-flyover/out/tokyo_station_r3d"
+      ],
+      "autoPort": true,
+      "port": 8772
+    },
+    {
+      "name": "tokyo-station-c3m",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "../lookaround-flyover/serve.py",
+        "../lookaround-flyover/out/tokyo_station"
+      ],
+      "autoPort": true,
+      "port": 8774
+    },
+    {
+      "name": "shibuya-r3d",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "../lookaround-flyover/serve.py",
+        "../lookaround-flyover/out/shibuya_r3d"
+      ],
+      "autoPort": true,
+      "port": 8773
+    },
+    {
       "name": "splat-viewer",
       "runtimeExecutable": "python",
       "runtimeArgs": [
