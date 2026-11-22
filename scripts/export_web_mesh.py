@@ -26,7 +26,18 @@
 --max-edge より長い辺を持つ三角形、パノラマから --max-range より遠い三角形、
 --sky-range より遠くて色が空らしい三角形。
 
-出力: index.html（three.js のビューア）、mesh.bin、atlas*.jpg、meta.json。
+高解像度（--zoom）: mt/7 の面の画像は 1 画素約 0.31° と粗く、近くで見るとぼやける。--zoom を
+付けると、Apple のサーバーから同じ面の高解像度の画像（5 で約 2 倍）を取り、書き出す画像だけ
+それに替える。高解像度の画像も mt/7 の画像と同じ角度の範囲をずれなく覆うので、画素座標は
+大きさの比をかけるだけでよい。どの三角形を残すかの判定（空の色など）は
+すべて mt/7 の画像のまま行う。
+取った画像は mt/7 と同じフォルダに <id>_face<面>_z<ズーム>.heic として残し、次からはそれを使う。
+アトラスは 2 倍の解像度で約 4 倍の数になり、JPEG のままではブラウザの GPU のメモリが足りなく
+なるので、--ktx2 で KTX2（Basis Universal、basisu で圧縮）にする。ブラウザで GPU の圧縮形式に
+変換して読むので、メモリは RGBA の 1/8（etc1s）〜1/4（uastc）で済む。圧縮は 4×4 画素ごとなので、
+切り出しの余白を 4 画素にして、隣の切り出しの色が混ざらないようにする。
+
+出力: index.html（three.js のビューア）、mesh.bin、atlas*.jpg（--ktx2 なら atlas*.ktx2）、meta.json。
 座標は全パノラマの中心を原点にした東・北・上（メートル）。
 データは手元のサーバーから読むだけで、どこにも送らない。
 """
@@ -35,7 +46,9 @@ import glob
 import json
 import multiprocessing as mp
 import os
+import shutil
 import sys
+import tempfile
 
 import numpy as np
 
@@ -77,22 +90,27 @@ HTML = """<!DOCTYPE html>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 
 const meta = await (await fetch('meta.json')).json();
 const buf = await (await fetch('mesh.bin')).arrayBuffer();
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0d10);
 
+const ren = new THREE.WebGLRenderer({ antialias: true });   // KTX2 の読み込みに GPU の対応を調べるので先に作る
 const loader = new THREE.TextureLoader();
+const ktx2 = new KTX2Loader()   // KTX2（Basis Universal）のアトラスは GPU の圧縮形式に変換して読む
+  .setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis/').detectSupport(ren);
 const mats = [], meshes = [];
 let tris = 0;
-const texs = await Promise.all(meta.groups.map(g => loader.loadAsync(g.file)));   // 並行して読む
+const texs = await Promise.all(meta.groups.map(g => (g.file.endsWith('.ktx2') ? ktx2 : loader).loadAsync(g.file)));   // 並行して読む
 for (const [k, g] of meta.groups.entries()) {
   const tex = texs[k];
   tex.flipY = false;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.generateMipmaps = false;               // 隣の切り出しがにじまないように
   tex.minFilter = THREE.LinearFilter;
+  tex.anisotropy = 16;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, g.pos, g.nv * 3), 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, g.uv, g.nv * 2), 2));
@@ -115,7 +133,6 @@ const r = meta.radius;
 cam.position.set(0, -r * 0.6, r * 0.45);
 cam.up.set(0, 0, 1);
 
-const ren = new THREE.WebGLRenderer({ antialias: true });
 ren.setPixelRatio(devicePixelRatio);
 ren.setSize(innerWidth, innerHeight);
 document.body.appendChild(ren.domElement);
@@ -190,6 +207,80 @@ def best_view(i, cen, nrm, a):
     return own <= np.minimum(s.min(1), own) * (1 + a.overlap)
 
 
+def hires_path(path, f, zoom):
+    """高解像度の面画像の保存先（scripts/pano_view.py と同じ名前で、取ったものを使い回す）。"""
+    return os.path.join(os.path.dirname(path), f"{os.path.basename(path).split('_')[0]}_face{f}_z{zoom}.heic")
+
+
+def fetch_hires(paths, zoom, jobs=4):
+    """パノラマの 6 面の高解像度画像を取って保存する（すでにあるものは飛ばす）。build_id は
+    mt/7 と同じフォルダの index.json から。取れなかった面は、書き出しで mt/7 の画像を使う。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from streetlevel.lookaround import get_panorama_face
+    from streetlevel.lookaround.auth import Authenticator
+
+    bids = {}
+    for d in {os.path.dirname(p) for p in paths}:
+        idx = os.path.join(d, "index.json")
+        if os.path.exists(idx):
+            bids.update({str(m["id"]): m["build_id"] for m in json.load(open(idx))})
+    todo = [(p, f) for p in paths for f in range(6) if not os.path.exists(hires_path(p, f, zoom))]
+    print(f"高解像度の面画像（ズーム {zoom}）: {6 * len(paths) - len(todo)} 枚あり、{len(todo)} 枚取る", flush=True)
+    auth = Authenticator()
+
+    def get(job):
+        p, f = job
+        pid = os.path.basename(p).split("_")[0]
+        if pid not in bids:
+            return False
+        try:
+            b = get_panorama_face((int(pid), bids[pid]), f, zoom, auth)
+        except Exception:   # 取れない面は mt/7 の画像のまま
+            return False
+        open(hires_path(p, f, zoom) + ".tmp", "wb").write(b)
+        os.replace(hires_path(p, f, zoom) + ".tmp", hires_path(p, f, zoom))
+        return True
+
+    with ThreadPoolExecutor(jobs) as pool:
+        ok = sum(pool.map(get, todo))
+    if ok < len(todo):
+        print(f"  {len(todo) - ok} 枚は取れなかった（mt/7 の画像を使う）", flush=True)
+
+
+def hires_face(path, f, zoom):
+    """面 f の高解像度画像（なければ None）。"""
+    from PIL import Image
+    from pillow_heif import register_heif_opener
+
+    p = hires_path(path, f, zoom)
+    if not os.path.exists(p):
+        return None
+    register_heif_opener()
+    return np.asarray(Image.open(p).convert("RGB"))
+
+
+def emit(out, E, px, T, img):
+    """三角形 T を、重心の 64 px の区画ごとに切り出して out に足す。残る三角形は画像の
+    中で散らばるので、面ごとの外接矩形で切ると空白まで詰めることになる。"""
+    if not len(T):
+        return
+    H, W = img.shape[:2]
+    # KTX2 は 4×4 画素の区画ごとに圧縮するので、余白を 4 画素にして隣の切り出しと区画を分ける
+    pad = 4 if _JOB.get("a") is not None and _JOB["a"].ktx2 else PAD
+    c = (px[T[:, 0]] + px[T[:, 1]] + px[T[:, 2]]) / 3
+    cell = (c[:, 1] // TILE).astype(int) * 1000 + (c[:, 0] // TILE).astype(int)
+    for k in np.unique(cell):
+        t = T[cell == k]
+        used, t = np.unique(t, return_inverse=True)
+        q = px[used]
+        x0, y0 = np.maximum(np.floor(q.min(0)).astype(int) - pad, 0)
+        x1 = min(int(np.ceil(q[:, 0].max())) + pad, W)
+        y1 = min(int(np.ceil(q[:, 1].max())) + pad, H)
+        out.append((E[used].astype(np.float32), (q - [x0, y0]).astype(np.float32),
+                    t.reshape(-1, 3).astype(np.uint32), np.ascontiguousarray(img[y0:y1, x0:x1])))
+
+
 def trimmed(i, path):
     """パノラマ i の、自分がよく写している部分の三角形。面ごとに
     (頂点 (m, 3) 東・北・上, 切り出した画像での画素座標 (m, 2), 三角形 (k, 3), 切り出した画像)。"""
@@ -232,22 +323,11 @@ def trimmed(i, path):
                       np.clip(c[:, 0].astype(int), 0, W - 1)].astype(np.int16)
             sky = ((col.min(1) > a.sky_min) | (col[:, 2] - col[:, 0] > 20)) & (col[:, 2] >= col[:, 0])
             sel &= ~(sky & (np.linalg.norm(mid, axis=1) > a.sky_range))
-        T = T[sel]
-        if not len(T):
-            continue
-        # 残る三角形は画像の中で散らばるので、重心の区画ごとに切り出す（面ごとの
-        # 外接矩形で切ると空白まで詰めることになる）
-        c = (px[T[:, 0]] + px[T[:, 1]] + px[T[:, 2]]) / 3
-        cell = (c[:, 1] // TILE).astype(int) * 1000 + (c[:, 0] // TILE).astype(int)
-        for k in np.unique(cell):
-            t = T[cell == k]
-            used, t = np.unique(t, return_inverse=True)
-            q = px[used]
-            x0, y0 = np.maximum(np.floor(q.min(0)).astype(int) - PAD, 0)
-            x1 = min(int(np.ceil(q[:, 0].max())) + PAD, W)
-            y1 = min(int(np.ceil(q[:, 1].max())) + PAD, H)
-            out.append((E[used].astype(np.float32), (q - [x0, y0]).astype(np.float32),
-                        t.reshape(-1, 3).astype(np.uint32), np.ascontiguousarray(img[y0:y1, x0:x1])))
+        # 判定はすべて mt/7 の画像の画素で行い、書き出す画像だけ高解像度にする（同じ範囲を覆うので、
+        # 画素座標は大きさの比をかけるだけ）
+        hi = hires_face(path, f, a.zoom) if a.zoom is not None else None
+        s = np.array([hi.shape[1] / W, hi.shape[0] / H]) if hi is not None else 1
+        emit(out, E, px * s, T[sel], hi if hi is not None else img)
     return out
 
 
@@ -256,6 +336,25 @@ def _one(job):
         return trimmed(*job)
     except Exception as e:  # 失敗したパノラマは飛ばす
         return f"{os.path.basename(job[1])}: {e}"
+
+
+def to_ktx2(img, out, a):
+    """画像を basisu で KTX2 に圧縮する（ETC1S か UASTC。ブラウザで GPU の圧縮形式に変換して
+    読むので、GPU のメモリは RGBA の 1/8（ETC1S）〜1/4（UASTC）で済む）。"""
+    import subprocess
+
+    from PIL import Image
+
+    tmp = tempfile.mkdtemp(prefix="lookaround_ktx2_")
+    try:
+        png = os.path.join(tmp, "atlas.png")
+        Image.fromarray(img).save(png, compress_level=1)
+        mode = (["-uastc", "-uastc_level", "2", "-uastc_rdo_l", str(a.ktx2_rdo)] if a.ktx2 == "uastc"
+                else ["-q", str(a.ktx2_q)])
+        subprocess.run([a.basisu, "-ktx2", *mode, "-output_file", os.path.abspath(out), png],
+                       check=True, cwd=tmp, stdout=subprocess.DEVNULL)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 class Shelves:
@@ -305,6 +404,16 @@ def main():
     ap.add_argument("--candidates", type=int, default=16,
                     help="三角形ごとに比べる、水平に近いパノラマの数")
     ap.add_argument("--quality", type=int, default=90, help="アトラスの JPEG の画質")
+    ap.add_argument("--zoom", type=int, default=None,
+                    help="面の画像に、このズームの高解像度画像を使う（0 が最高、7 が最低。5 で mt/7 の約 2 倍）。"
+                         "mt/7 と同じフォルダに <id>_face<面>_z<ズーム>.heic として取っておく")
+    ap.add_argument("--zoom-jobs", type=int, default=4, help="高解像度の面画像を同時に取る数")
+    ap.add_argument("--ktx2", choices=["etc1s", "uastc"], default=None,
+                    help="アトラスを JPEG でなく KTX2（Basis Universal）にする。GPU のメモリが少なくて済む")
+    ap.add_argument("--ktx2-q", type=int, default=255, help="ETC1S の画質（1〜255）")
+    ap.add_argument("--ktx2-rdo", type=float, default=1.0, help="UASTC の RDO の強さ（小さいほど高画質で大きい）")
+    ap.add_argument("--basisu", default=os.environ.get("BASISU", "basisu"),
+                    help="basisu の実行ファイル（既定は環境変数 BASISU、なければ PATH の basisu）")
     ap.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
     a = ap.parse_args()
     if a.list:
@@ -313,6 +422,10 @@ def main():
              for f in (sorted(glob.glob(os.path.join(p, "*.bin"))) if os.path.isdir(p) else [p])]
     if not a.mt7:
         sys.exit("mt/7 ファイルがない")
+    if a.ktx2 and not shutil.which(a.basisu):
+        sys.exit(f"basisu が見つからない: {a.basisu}（--basisu か環境変数 BASISU で指定する）")
+    if a.zoom is not None:
+        fetch_hires(a.mt7, a.zoom, a.zoom_jobs)
 
     with mp.Pool(a.jobs) as pool:
         ecef = np.array(pool.map(pano_position, a.mt7, chunksize=16))
@@ -345,12 +458,16 @@ def main():
     groups, blobs, off = [], [], 0
     for page in range(len(shelves.pages)):
         mine = [(x, y, f) for (pg, x, y), f in placed if pg == page]
-        h = shelves.pages[page]["top"]   # 使った高さまでで切る
+        h = -(-shelves.pages[page]["top"] // 4) * 4   # 使った高さまでで切る（KTX2 の区画に合わせて 4 の倍数）
         atlas = np.zeros((h, ATLAS, 3), np.uint8)
         for x, y, (_, _, _, img) in mine:
             atlas[y:y + img.shape[0], x:x + img.shape[1]] = img
-        name = f"atlas{page}.jpg"
-        Image.fromarray(atlas).save(os.path.join(a.out, name), quality=a.quality)
+        if a.ktx2:
+            name = f"atlas{page}.ktx2"
+            to_ktx2(atlas, os.path.join(a.out, name), a)
+        else:
+            name = f"atlas{page}.jpg"
+            Image.fromarray(atlas).save(os.path.join(a.out, name), quality=a.quality)
         base, idx = 0, []
         for _, _, (V, _, T, _) in mine:
             idx.append(T + base)
